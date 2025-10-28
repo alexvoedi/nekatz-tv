@@ -37,7 +37,7 @@ async function initialize() {
 // Stream the current video
 app.get('/api/stream', (req: Request, res: Response) => {
   if (!playlistManager) {
-    return res.status(503).json({ error: 'Playlist not initialized' })
+    return res.status(503).json({ error: 'Playlist not initialized. Please try again in a moment or check server status.' })
   }
 
   const currentItem = playlistManager.getCurrentItem()
