@@ -4,7 +4,7 @@ export interface Episode {
   showName: string
   season: number
   episode: number
-  part: string // 'a', 'b', 'c', or empty string for no part
+  part: string
   duration: number // in seconds
 }
 
