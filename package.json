@@ -1,0 +1,31 @@
+{
+  "name": "@alexvoedi/cps",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.17.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "nx run-many -t dev",
+    "check": "nx run-many -t test lint typecheck",
+    "lint": "nx run-many -t lint",
+    "lint:fix": "nx run-many -t lint:fix",
+    "build": "nx run-many -t build",
+    "docker:build": "docker build -t cps .",
+    "typecheck": "nx run-many -t typecheck",
+    "prepare": "husky || true",
+    "knip": "knip"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "husky": "catalog:",
+    "knip": "catalog:",
+    "nx": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:"
+  }
+}

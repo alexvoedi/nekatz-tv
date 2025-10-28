@@ -1,0 +1,56 @@
+{
+  "name": "frontend",
+  "type": "module",
+  "version": "0.1.1",
+  "private": true,
+  "description": "A website for the CPS World of Warcraft guild",
+  "license": "UNLICENSED",
+  "homepage": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexvoedi/cps"
+  },
+  "bugs": {
+    "url": "https://github.com/alexvoedi/cps/issues/"
+  },
+  "keywords": [],
+  "scripts": {
+    "dev": "vite",
+    "build": "cross-env NODE_ENV=production vite build",
+    "serve": "vite preview",
+    "lint": "eslint . --cache --concurrency=1",
+    "lint:fix": "eslint . --fix --concurrency=1",
+    "typecheck": "tsgo --noEmit",
+    "typecheck:watch": "tsgo --noEmit --watch"
+  },
+  "dependencies": {
+    "@vueuse/core": "catalog:",
+    "@vueuse/head": "catalog:",
+    "@vueuse/router": "catalog:",
+    "ky": "catalog:",
+    "pinia": "catalog:",
+    "vue": "catalog:",
+    "vue-router": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "@unocss/eslint-plugin": "catalog:",
+    "@unocss/preset-attributify": "catalog:",
+    "@unocss/preset-icons": "catalog:",
+    "@unocss/preset-uno": "catalog:",
+    "@unocss/reset": "catalog:",
+    "@unocss/transformer-directives": "catalog:",
+    "@unocss/transformer-variant-group": "catalog:",
+    "@vitejs/plugin-vue": "catalog:",
+    "@vue/compiler-sfc": "catalog:",
+    "cross-env": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "unocss": "catalog:",
+    "unplugin-auto-import": "catalog:",
+    "unplugin-vue-components": "catalog:",
+    "vite": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

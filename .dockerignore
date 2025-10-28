@@ -1,0 +1,45 @@
+# Node modules
+node_modules/
+apps/**/node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build directories
+dist/
+build/
+out/
+coverage/
+.tmp/
+.cache/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Husky
+.husky/_/.gitignore
+
+# Nx
+.nx/cache/
+.nx/workspace-data/
+
+# Miscellaneous
+*.env
+*.local
+*.env.local
+*.env.*.local

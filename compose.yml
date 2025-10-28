@@ -1,0 +1,29 @@
+services:
+
+  backend:
+    build:
+      target: backend
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - 3000:3000
+    env_file:
+      - .env
+    volumes:
+      - ./shows:/prod/backend/shows:ro
+
+  frontend:
+    build:
+      target: frontend
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: $VITE_BACKEND_URL
+        VITE_WEBSOCKET_URL: $VITE_WEBSOCKET_URL
+    restart: unless-stopped
+    ports:
+      - 5173:80
