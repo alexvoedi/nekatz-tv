@@ -86,6 +86,4 @@ USER node
 
 COPY --chown=node:node --chmod=755 --from=build-backend /prod/backend .
 
-EXPOSE 3000
-
 CMD ["node", "dist/index.js"]
