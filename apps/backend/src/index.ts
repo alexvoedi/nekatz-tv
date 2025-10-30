@@ -128,6 +128,15 @@ app.get('/api/stream', async (req: Request, res: Response) => {
     else {
       // Audio is already compatible, stream original file with range support
       console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
+
+      // If a start position is specified but we're streaming the original file,
+      // we need to inform the frontend that it should seek client-side
+      if (startPosition > 0) {
+        // For non-transcoded streams, we can't seek server-side efficiently
+        // So we'll stream from the beginning and let the client seek
+        console.log(`Note: Client should seek to position ${startPosition}s`)
+      }
+
       streamOriginalFile(videoPath, req, res)
     }
   }

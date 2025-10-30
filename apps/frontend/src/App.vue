@@ -23,21 +23,31 @@ async function syncToCurrentPosition() {
         // Pass the start position to the backend for transcoded streams
         videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}&t=${Date.now()}`
 
-        // Try to play - if autoplay is blocked, mute and try again
-        try {
-          await videoRef.value.play()
-          hasUserInteracted.value = true
-        }
-        catch (err) {
-          console.warn('Autoplay blocked, playing muted:', err)
-          videoRef.value.muted = true
+        // Wait for metadata to load, then seek to position
+        const onLoadedMetadata = async () => {
+          if (videoRef.value && data.position > 0) {
+            console.log(`Seeking to position: ${data.position}s`)
+            videoRef.value.currentTime = data.position
+          }
+
+          // Try to play - if autoplay is blocked, mute and try again
           try {
-            await videoRef.value.play()
+            await videoRef.value!.play()
+            hasUserInteracted.value = true
           }
-          catch (mutedErr) {
-            console.error('Autoplay failed even when muted:', mutedErr)
+          catch (err) {
+            console.warn('Autoplay blocked, playing muted:', err)
+            videoRef.value!.muted = true
+            try {
+              await videoRef.value!.play()
+            }
+            catch (mutedErr) {
+              console.error('Autoplay failed even when muted:', mutedErr)
+            }
           }
         }
+
+        videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
       }
       // Don't seek if it's the same episode - the backend already handles the position
     }
