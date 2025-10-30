@@ -6,6 +6,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'
 const videoRef = ref<HTMLVideoElement | null>(null)
 let currentEpisodePath: string | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
+const hasUserInteracted = ref(false)
 
 async function syncToCurrentPosition() {
   try {
@@ -21,12 +22,32 @@ async function syncToCurrentPosition() {
         currentEpisodePath = newEpisodePath
         // Pass the start position to the backend for transcoded streams
         videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}&t=${Date.now()}`
-        videoRef.value.play().catch(err => console.error('Autoplay failed:', err))
+
+        // Try to play - if autoplay is blocked, mute and try again
+        try {
+          await videoRef.value.play()
+          hasUserInteracted.value = true
+        }
+        catch (err) {
+          console.warn('Autoplay blocked, playing muted:', err)
+          videoRef.value.muted = true
+          try {
+            await videoRef.value.play()
+          }
+          catch (mutedErr) {
+            console.error('Autoplay failed even when muted:', mutedErr)
+          }
+        }
       }
       else {
         // Same episode, just seek to the current position
         videoRef.value.currentTime = data.position
-        videoRef.value.play().catch(err => console.error('Autoplay failed:', err))
+        try {
+          await videoRef.value.play()
+        }
+        catch (err) {
+          console.error('Play failed:', err)
+        }
       }
     }
   }
@@ -40,6 +61,13 @@ function handleEnded() {
   syncToCurrentPosition()
 }
 
+function handleUserInteraction() {
+  // When user interacts with video controls, unmute if needed
+  if (videoRef.value?.muted && hasUserInteracted.value === false) {
+    hasUserInteracted.value = true
+  }
+}
+
 onMounted(() => {
   syncToCurrentPosition()
 
@@ -51,6 +79,8 @@ onMounted(() => {
   // Handle video end
   if (videoRef.value) {
     videoRef.value.addEventListener('ended', handleEnded)
+    videoRef.value.addEventListener('click', handleUserInteraction)
+    videoRef.value.addEventListener('play', handleUserInteraction)
   }
 })
 
@@ -60,6 +90,8 @@ onUnmounted(() => {
   }
   if (videoRef.value) {
     videoRef.value.removeEventListener('ended', handleEnded)
+    videoRef.value.removeEventListener('click', handleUserInteraction)
+    videoRef.value.removeEventListener('play', handleUserInteraction)
   }
 })
 </script>
@@ -69,6 +101,7 @@ onUnmounted(() => {
     ref="videoRef"
     controls
     autoplay
+    playsinline
   />
 </template>
 
