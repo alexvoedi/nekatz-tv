@@ -75,6 +75,8 @@ app.get('/api/stream', async (req: Request, res: Response) => {
   const videoPath = currentItem.episode.path
   const startPosition = req.query.start ? Number.parseInt(req.query.start as string, 10) : 0
 
+  console.log(`Stream request for ${currentItem.episode.filename}, start position: ${startPosition}s`)
+
   try {
     // Check if audio needs transcoding
     const { needsTranscoding, codec } = await checkAudioCodec(videoPath)
@@ -94,16 +96,15 @@ app.get('/api/stream', async (req: Request, res: Response) => {
         '-c:v copy', // Copy video stream as-is (no transcoding)
         '-c:a aac', // Transcode audio to AAC (browser-compatible)
         '-b:a 192k', // Audio bitrate
+        '-avoid_negative_ts make_zero', // Ensure timestamps start at 0
         '-movflags frag_keyframe+empty_moov+faststart', // Enable streaming
         '-f mp4', // Output format
       ]
 
       // If start position is specified, seek to that position
       if (startPosition > 0) {
-        // Seek after input for accuracy, but add accurate flag
-        command
-          .inputOptions(['-accurate_seek'])
-          .seekInput(startPosition)
+        // Seek accurately at input level
+        command.seekInput(startPosition)
       }
 
       command
