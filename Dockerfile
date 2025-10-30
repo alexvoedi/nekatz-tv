@@ -77,6 +77,9 @@ CMD ["nginx", "-g", "daemon off;"]
 
 FROM node:22-alpine AS backend
 
+# Install ffmpeg for video processing
+RUN apk add --no-cache ffmpeg
+
 WORKDIR /prod/backend
 
 USER node
