@@ -27,8 +27,14 @@ export class PlaylistManager {
 
   constructor(shows: Show[], stateFile?: string, rescanCallback?: () => Promise<Show[]>) {
     this.shows = shows.filter(show => show.episodes.length > 0)
-    this.stateFile = stateFile || path.join(process.cwd(), 'playlist-state.json')
+    this.stateFile = stateFile || path.join(process.cwd(), 'cache', 'playlist-state.json')
     this.rescanCallback = rescanCallback || null
+
+    // Ensure cache directory exists
+    const cacheDir = path.dirname(this.stateFile)
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true })
+    }
 
     // Try to restore previous state
     const restored = this.restoreState()
@@ -134,7 +140,7 @@ export class PlaylistManager {
           validPaths.add(episode.path)
         }
       }
-      cleanupMetadataCache(validPaths)
+      await cleanupMetadataCache(validPaths)
 
       console.log(`Rescanned shows: ${this.shows.length} shows, ${this.shows.reduce((sum, s) => sum + s.episodes.length, 0)} episodes`)
     }

@@ -56,5 +56,8 @@ Thumbs.db
 # Database
 *dump*
 
+# Cache
+cache/
+
 # Coverage
 coverage/

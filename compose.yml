@@ -12,6 +12,7 @@ services:
       - .env
     volumes:
       - ./shows:/prod/backend/shows:ro
+      - ./cache:/prod/backend/cache
 
   frontend:
     build:

@@ -1,6 +1,8 @@
 import type { Episode, Show } from './types.js'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 import ffmpeg from 'fluent-ffmpeg'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.webm', '.mov']
@@ -21,6 +23,49 @@ interface MetadataCache {
 }
 
 const metadataCache = new Map<string, MetadataCache>()
+const CACHE_DIR = path.join(process.cwd(), 'cache')
+const METADATA_CACHE_FILE = path.join(CACHE_DIR, 'video-metadata.json')
+
+// Ensure cache directory exists
+function ensureCacheDir() {
+  if (!fsSync.existsSync(CACHE_DIR)) {
+    fsSync.mkdirSync(CACHE_DIR, { recursive: true })
+  }
+}
+
+// Load metadata cache from disk
+async function loadMetadataCache() {
+  try {
+    ensureCacheDir()
+    const data = await fs.readFile(METADATA_CACHE_FILE, 'utf-8')
+    const parsed = JSON.parse(data) as Record<string, MetadataCache>
+
+    // Populate the Map from the loaded data
+    for (const [filePath, cache] of Object.entries(parsed)) {
+      metadataCache.set(filePath, cache)
+    }
+
+    console.log(`Loaded ${metadataCache.size} cached video metadata entries`)
+  }
+  catch (error) {
+    // Cache file doesn't exist or is invalid, start fresh
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('Failed to load metadata cache:', error)
+    }
+  }
+}
+
+// Save metadata cache to disk
+async function saveMetadataCache() {
+  try {
+    ensureCacheDir()
+    const cacheObject = Object.fromEntries(metadataCache)
+    await fs.writeFile(METADATA_CACHE_FILE, JSON.stringify(cacheObject, null, 2))
+  }
+  catch (error) {
+    console.error('Failed to save metadata cache:', error)
+  }
+}
 
 // Parse filename like "Show Name - S01E01.mp4" or "Show Name - S01E01a.mp4" or "Show Name - S01E01 - Episode Title.mp4"
 function parseEpisodeFilename(filename: string): { showName: string, season: number, episode: number, part: string } | null {
@@ -90,6 +135,11 @@ async function getCachedVideoDuration(filePath: string): Promise<number> {
 }
 
 export async function scanShows(showsDir: string): Promise<Show[]> {
+  // Load cached metadata on first scan
+  if (metadataCache.size === 0) {
+    await loadMetadataCache()
+  }
+
   try {
     const entries = await fs.readdir(showsDir, { withFileTypes: true })
     const showFolders = entries.filter(entry => entry.isDirectory())
@@ -156,6 +206,9 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
       }
     }
 
+    // Save cache after scanning
+    await saveMetadataCache()
+
     return shows
   }
   catch (error) {
@@ -166,7 +219,7 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
 
 // Clean up cache entries for files that no longer exist
 // This should be called periodically to prevent memory leaks
-export function cleanupMetadataCache(validPaths: Set<string>) {
+export async function cleanupMetadataCache(validPaths: Set<string>) {
   const keysToDelete: string[] = []
 
   for (const [filePath] of metadataCache) {
@@ -181,5 +234,7 @@ export function cleanupMetadataCache(validPaths: Set<string>) {
 
   if (keysToDelete.length > 0) {
     console.log(`Cleaned up ${keysToDelete.length} stale cache entries`)
+    // Save cache after cleanup
+    await saveMetadataCache()
   }
 }
