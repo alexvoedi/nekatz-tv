@@ -7,11 +7,10 @@ const videoRef = ref<HTMLVideoElement | null>(null)
 let currentEpisodePath: string | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 const hasUserInteracted = ref(false)
-let isLoadingNewEpisode = false // Prevent concurrent loads
+let isLoadingNewEpisode = false
 let loadingTimeout: ReturnType<typeof setTimeout> | null = null
 
 async function syncToCurrentPosition() {
-  // Prevent concurrent sync calls
   if (isLoadingNewEpisode)
     return
 
@@ -34,58 +33,33 @@ async function syncToCurrentPosition() {
           loadingTimeout = null
         }
 
-        // For transcoded streams, we MUST use the start parameter
-        // For non-transcoded, browser can handle seeking with Range requests
-        const startParam = data.position > 0 ? `?start=${Math.floor(data.position)}` : ''
-        videoRef.value.src = `${BACKEND_URL}/api/stream${startParam}`
+        // Build stream URL with start position (backend handles seeking server-side)
+        let videoUrl = `${BACKEND_URL}/api/stream`
+        if (data.position > 0) {
+          videoUrl += `?start=${Math.floor(data.position)}`
+        }
 
-        console.log(`Loading video with start parameter: ${startParam}`)
+        videoRef.value.src = videoUrl
+        console.log(`Loading video: ${videoUrl}`)
 
-        // Wait for metadata to load, then seek to position
+        // Wait for metadata, then play
         const onLoadedMetadata = async () => {
-          console.log('Metadata loaded, readyState:', videoRef.value?.readyState)
+          console.log('Metadata loaded, playing video')
 
-          // Clear timeout since we successfully loaded
           if (loadingTimeout) {
             clearTimeout(loadingTimeout)
             loadingTimeout = null
           }
 
-          // Try to play first (for autoplay policy)
+          // Try to play (handle autoplay policy)
           try {
             await videoRef.value!.play()
             hasUserInteracted.value = true
-            console.log('Video playing')
           }
           catch (err) {
             console.warn('Autoplay blocked, playing muted:', err)
             videoRef.value!.muted = true
-            try {
-              await videoRef.value!.play()
-              console.log('Video playing muted')
-            }
-            catch (mutedErr) {
-              console.error('Autoplay failed even when muted:', mutedErr)
-            }
-          }
-
-          // For transcoded streams, the backend already seeked server-side
-          // For non-transcoded, we need to seek client-side ASAP
-          if (videoRef.value && data.position > 0) {
-            // Seek immediately after play starts
-            console.log(`Seeking to ${data.position}s`)
-            videoRef.value.currentTime = data.position
-
-            // Verify after a short delay
-            setTimeout(() => {
-              if (videoRef.value && Math.abs(videoRef.value.currentTime - data.position) > 5) {
-                console.log(`Position mismatch detected, re-seeking from ${videoRef.value.currentTime}s to ${data.position}s`)
-                videoRef.value.currentTime = data.position
-              }
-              else {
-                console.log(`Position correct: ${videoRef.value?.currentTime}s (target: ${data.position}s)`)
-              }
-            }, 1000)
+            await videoRef.value!.play().catch(e => console.error('Autoplay failed:', e))
           }
 
           isLoadingNewEpisode = false
@@ -93,9 +67,9 @@ async function syncToCurrentPosition() {
 
         videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
 
-        // Fallback: Reset flag after timeout in case metadata never loads
+        // Fallback timeout
         loadingTimeout = setTimeout(() => {
-          console.warn('Metadata loading timeout - resetting flag')
+          console.warn('Metadata loading timeout')
           isLoadingNewEpisode = false
           loadingTimeout = null
         }, 5000)
@@ -161,6 +135,7 @@ onUnmounted(() => {
     controls
     autoplay
     playsinline
+    preload="metadata"
   />
 </template>
 
