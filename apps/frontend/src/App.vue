@@ -39,16 +39,7 @@ async function syncToCurrentPosition() {
           }
         }
       }
-      else {
-        // Same episode, just seek to the current position
-        videoRef.value.currentTime = data.position
-        try {
-          await videoRef.value.play()
-        }
-        catch (err) {
-          console.error('Play failed:', err)
-        }
-      }
+      // Don't seek if it's the same episode - the backend already handles the position
     }
   }
   catch (err) {

@@ -98,12 +98,12 @@ app.get('/api/stream', async (req: Request, res: Response) => {
         '-f mp4', // Output format
       ]
 
-      // If start position is specified, seek accurately to that position
+      // If start position is specified, seek to that position
       if (startPosition > 0) {
-        // Use accurate seeking: seek before input (fast but inaccurate) then after input (accurate)
-        command.seekInput(Math.max(0, startPosition - 2)) // Seek to 2 seconds before
-        outputOptions.unshift(`-ss ${startPosition}`) // Then seek accurately after decoding
-        outputOptions.unshift('-avoid_negative_ts make_zero') // Ensure timestamps start at 0
+        // Seek after input for accuracy, but add accurate flag
+        command
+          .inputOptions(['-accurate_seek'])
+          .seekInput(startPosition)
       }
 
       command
