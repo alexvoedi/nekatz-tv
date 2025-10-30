@@ -28,10 +28,8 @@ FROM build AS build-frontend
 WORKDIR /app
 
 ARG VITE_BACKEND_URL
-ARG VITE_WEBSOCKET_URL
 
 ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
-ENV VITE_WEBSOCKET_URL=$VITE_WEBSOCKET_URL
 
 COPY apps/backend ./apps/backend
 COPY apps/frontend ./apps/frontend
