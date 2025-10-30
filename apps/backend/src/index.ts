@@ -90,19 +90,24 @@ app.get('/api/stream', async (req: Request, res: Response) => {
       // Transcode audio on-the-fly
       const command = ffmpeg(videoPath)
 
-      // If start position is specified, seek to that position
+      const outputOptions = [
+        '-c:v copy', // Copy video stream as-is (no transcoding)
+        '-c:a aac', // Transcode audio to AAC (browser-compatible)
+        '-b:a 192k', // Audio bitrate
+        '-movflags frag_keyframe+empty_moov+faststart', // Enable streaming
+        '-f mp4', // Output format
+      ]
+
+      // If start position is specified, seek accurately to that position
       if (startPosition > 0) {
-        command.seekInput(startPosition)
+        // Use accurate seeking: seek before input (fast but inaccurate) then after input (accurate)
+        command.seekInput(Math.max(0, startPosition - 2)) // Seek to 2 seconds before
+        outputOptions.unshift(`-ss ${startPosition}`) // Then seek accurately after decoding
+        outputOptions.unshift('-avoid_negative_ts make_zero') // Ensure timestamps start at 0
       }
 
       command
-        .outputOptions([
-          '-c:v copy', // Copy video stream as-is (no transcoding)
-          '-c:a aac', // Transcode audio to AAC (browser-compatible)
-          '-b:a 192k', // Audio bitrate
-          '-movflags frag_keyframe+empty_moov+faststart', // Enable streaming
-          '-f mp4', // Output format
-        ])
+        .outputOptions(outputOptions)
         .on('start', (commandLine) => {
           console.log('FFmpeg command:', commandLine)
         })
