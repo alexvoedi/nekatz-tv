@@ -53,28 +53,66 @@ app.get('/api/stream', (req: Request, res: Response) => {
     const fileSize = stat.size
 
     if (range) {
+      // Parse range header (e.g., "bytes=0-1023")
       const parts = range.replace(/bytes=/, '').split('-')
       const start = Number.parseInt(parts[0], 10)
       const end = parts[1] ? Number.parseInt(parts[1], 10) : fileSize - 1
+
+      // Validate range
+      if (start >= fileSize || end >= fileSize) {
+        res.status(416).send('Requested range not satisfiable')
+        return
+      }
+
       const chunksize = (end - start) + 1
-      const file = fs.createReadStream(videoPath, { start, end })
+
+      // Optimized chunk size for video streaming (use larger chunks for better performance)
+      const OPTIMAL_CHUNK_SIZE = 1024 * 1024 // 1MB chunks
+      const highWaterMark = Math.min(chunksize, OPTIMAL_CHUNK_SIZE)
+
+      const file = fs.createReadStream(videoPath, { start, end, highWaterMark })
+
       const head = {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
         'Content-Type': 'video/mp4',
+        'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
       }
+
       res.writeHead(206, head)
       file.pipe(res)
+
+      // Handle stream errors
+      file.on('error', (error) => {
+        console.error('Stream error:', error)
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to stream video' })
+        }
+      })
     }
     else {
       const head = {
         'Content-Length': fileSize,
         'Content-Type': 'video/mp4',
         'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
       }
       res.writeHead(200, head)
-      fs.createReadStream(videoPath).pipe(res)
+
+      const stream = fs.createReadStream(videoPath, {
+        highWaterMark: 1024 * 1024, // 1MB chunks for better performance
+      })
+
+      stream.pipe(res)
+
+      // Handle stream errors
+      stream.on('error', (error) => {
+        console.error('Stream error:', error)
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to stream video' })
+        }
+      })
     }
   }
   catch (error) {

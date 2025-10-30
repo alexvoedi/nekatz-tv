@@ -5,6 +5,23 @@ import ffmpeg from 'fluent-ffmpeg'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.webm', '.mov']
 
+// Files to skip during scanning (macOS metadata, thumbnails, etc.)
+const SKIP_FILES = [
+  /^\./, // Hidden files (including .DS_Store)
+  /^\._/, // macOS resource forks
+  /Thumbs\.db$/i, // Windows thumbnails
+  /desktop\.ini$/i, // Windows folder config
+  /\.Zone\.Identifier$/i, // Windows downloaded file markers
+]
+
+// Cache for video metadata to avoid repeated ffprobe calls
+interface MetadataCache {
+  duration: number
+  mtime: number // File modification time
+}
+
+const metadataCache = new Map<string, MetadataCache>()
+
 // Parse filename like "Show Name - S01E01.mp4" or "Show Name - S01E01a.mp4" or "Show Name - S01E01 - Episode Title.mp4"
 function parseEpisodeFilename(filename: string): { showName: string, season: number, episode: number, part: string } | null {
   // Remove extension
@@ -45,6 +62,33 @@ async function getVideoDuration(filePath: string): Promise<number> {
   })
 }
 
+// Get video duration with caching based on file modification time
+async function getCachedVideoDuration(filePath: string): Promise<number> {
+  try {
+    const stats = await fs.stat(filePath)
+    const mtime = stats.mtimeMs
+
+    const cached = metadataCache.get(filePath)
+    if (cached?.mtime === mtime) {
+      // File hasn't changed, use cached duration
+      return cached.duration
+    }
+
+    // File is new or has changed, get fresh duration
+    const duration = await getVideoDuration(filePath)
+
+    // Cache the result
+    metadataCache.set(filePath, { duration, mtime })
+
+    return duration
+  }
+  catch (error) {
+    // If we can't stat the file, just try to get the duration normally
+    console.warn(`Failed to stat file ${filePath}, skipping cache:`, error)
+    return getVideoDuration(filePath)
+  }
+}
+
 export async function scanShows(showsDir: string): Promise<Show[]> {
   try {
     const entries = await fs.readdir(showsDir, { withFileTypes: true })
@@ -59,6 +103,11 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
       const episodes: Episode[] = []
 
       for (const file of files) {
+        // Skip macOS metadata files, hidden files, and other system files
+        if (SKIP_FILES.some(pattern => pattern.test(file))) {
+          continue
+        }
+
         const ext = path.extname(file).toLowerCase()
         if (!VIDEO_EXTENSIONS.includes(ext))
           continue
@@ -68,17 +117,25 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
           continue
 
         const filePath = path.join(folderPath, file)
-        const duration = await getVideoDuration(filePath)
 
-        episodes.push({
-          path: filePath,
-          filename: file,
-          showName: parsed.showName,
-          season: parsed.season,
-          episode: parsed.episode,
-          part: parsed.part,
-          duration,
-        })
+        try {
+          const duration = await getCachedVideoDuration(filePath)
+
+          episodes.push({
+            path: filePath,
+            filename: file,
+            showName: parsed.showName,
+            season: parsed.season,
+            episode: parsed.episode,
+            part: parsed.part,
+            duration,
+          })
+        }
+        catch (error) {
+          // Skip files that can't be processed (corrupted, unsupported format, etc.)
+          console.warn(`Skipping file ${file}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          continue
+        }
       }
 
       // Sort episodes by season, episode number, and part
@@ -104,5 +161,25 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
   catch (error) {
     console.error('Error scanning shows:', error)
     return []
+  }
+}
+
+// Clean up cache entries for files that no longer exist
+// This should be called periodically to prevent memory leaks
+export function cleanupMetadataCache(validPaths: Set<string>) {
+  const keysToDelete: string[] = []
+
+  for (const [filePath] of metadataCache) {
+    if (!validPaths.has(filePath)) {
+      keysToDelete.push(filePath)
+    }
+  }
+
+  for (const key of keysToDelete) {
+    metadataCache.delete(key)
+  }
+
+  if (keysToDelete.length > 0) {
+    console.log(`Cleaned up ${keysToDelete.length} stale cache entries`)
   }
 }

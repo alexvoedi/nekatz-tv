@@ -2,6 +2,7 @@ import type { Episode, PlaylistItem, Show } from './types.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { cleanupMetadataCache } from './video-scanner.js'
 
 interface SavedState {
   currentEpisode: {
@@ -126,6 +127,15 @@ export class PlaylistManager {
         }
       }
 
+      // Clean up metadata cache for files that no longer exist
+      const validPaths = new Set<string>()
+      for (const show of this.shows) {
+        for (const episode of show.episodes) {
+          validPaths.add(episode.path)
+        }
+      }
+      cleanupMetadataCache(validPaths)
+
       console.log(`Rescanned shows: ${this.shows.length} shows, ${this.shows.reduce((sum, s) => sum + s.episodes.length, 0)} episodes`)
     }
     catch (error) {
@@ -208,8 +218,10 @@ export class PlaylistManager {
   private generateInitialPlaylist() {
     let currentTime = this.playlistStartTime
 
-    // Generate playlist for the next 24 hours
-    const endTime = currentTime + (24 * 60 * 60 * 1000)
+    // Generate playlist for the next 2 hours only (reduced from 24 hours)
+    // We'll extend as needed with lazy evaluation
+    const INITIAL_LOOKAHEAD_HOURS = 2
+    const endTime = currentTime + (INITIAL_LOOKAHEAD_HOURS * 60 * 60 * 1000)
 
     while (currentTime < endTime) {
       const episode = this.getNextEpisode()
@@ -244,9 +256,11 @@ export class PlaylistManager {
       ) || null
     }
 
-    // Extend playlist if we're getting close to the end
+    // Extend playlist if we're getting close to the end (30 minutes instead of 1 hour)
+    // This reduces the lookahead window for better memory efficiency
     const lastItem = this.playlist[this.playlist.length - 1]
-    if (lastItem && lastItem.endTime - now < 60 * 60 * 1000) { // Less than 1 hour left
+    const EXTEND_THRESHOLD_MINUTES = 30
+    if (lastItem && lastItem.endTime - now < EXTEND_THRESHOLD_MINUTES * 60 * 1000) {
       this.extendPlaylist()
     }
 
@@ -278,8 +292,10 @@ export class PlaylistManager {
     const lastItem = this.playlist[this.playlist.length - 1]
     let currentTime = lastItem ? lastItem.endTime : Date.now()
 
-    // Generate playlist for the next 24 hours from the last item
-    const endTime = currentTime + (24 * 60 * 60 * 1000)
+    // Generate playlist for the next 2 hours only (reduced from 24 hours)
+    // This is more memory efficient and adapts better to changes
+    const EXTEND_LOOKAHEAD_HOURS = 2
+    const endTime = currentTime + (EXTEND_LOOKAHEAD_HOURS * 60 * 60 * 1000)
 
     while (currentTime < endTime) {
       const episode = this.getNextEpisode()
@@ -296,8 +312,10 @@ export class PlaylistManager {
       currentTime = item.endTime
     }
 
-    // Clean up old items (keep only last hour of history)
-    const cutoffTime = Date.now() - (60 * 60 * 1000)
+    // Clean up old items (keep only last 30 minutes of history instead of 1 hour)
+    // This reduces memory footprint
+    const HISTORY_KEEP_MINUTES = 30
+    const cutoffTime = Date.now() - (HISTORY_KEEP_MINUTES * 60 * 1000)
     this.playlist = this.playlist.filter(item => item.endTime > cutoffTime)
   }
 
