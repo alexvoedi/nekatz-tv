@@ -4,6 +4,7 @@ import path from 'node:path'
 import process from 'node:process'
 import cors from 'cors'
 import express from 'express'
+import ffmpeg from 'fluent-ffmpeg'
 import { PlaylistManager } from './playlist-manager.js'
 import { scanShows } from './video-scanner.js'
 
@@ -34,8 +35,34 @@ async function initialize() {
   console.log('Playlist initialized')
 }
 
-// Stream the current video
-app.get('/api/stream', (req: Request, res: Response) => {
+// Helper function to check if audio codec is browser-compatible
+async function checkAudioCodec(filePath: string): Promise<{ needsTranscoding: boolean, codec: string }> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        reject(err)
+        return
+      }
+
+      const audioStream = metadata.streams.find(s => s.codec_type === 'audio')
+      if (!audioStream) {
+        // No audio stream, no transcoding needed
+        resolve({ needsTranscoding: false, codec: 'none' })
+        return
+      }
+
+      const codec = audioStream.codec_name || ''
+      // Browser-compatible codecs: aac, mp3, opus, vorbis
+      const compatibleCodecs = ['aac', 'mp3', 'opus', 'vorbis']
+      const needsTranscoding = !compatibleCodecs.includes(codec)
+
+      resolve({ needsTranscoding, codec })
+    })
+  })
+}
+
+// Stream the current video with audio transcoding for browser compatibility
+app.get('/api/stream', async (req: Request, res: Response) => {
   if (!playlistManager) {
     return res.status(503).json({ error: 'Playlist not initialized. Please try again in a moment or check server status.' })
   }
@@ -46,6 +73,58 @@ app.get('/api/stream', (req: Request, res: Response) => {
   }
 
   const videoPath = currentItem.episode.path
+
+  try {
+    // Check if audio needs transcoding
+    const { needsTranscoding, codec } = await checkAudioCodec(videoPath)
+
+    if (needsTranscoding) {
+      console.log(`Transcoding audio from ${codec} to AAC for browser compatibility`)
+
+      // Set headers for streaming
+      res.setHeader('Content-Type', 'video/mp4')
+      res.setHeader('Cache-Control', 'public, max-age=3600')
+
+      // Transcode audio on-the-fly
+      const command = ffmpeg(videoPath)
+        .outputOptions([
+          '-c:v copy', // Copy video stream as-is (no transcoding)
+          '-c:a aac', // Transcode audio to AAC (browser-compatible)
+          '-b:a 192k', // Audio bitrate
+          '-movflags frag_keyframe+empty_moov+faststart', // Enable streaming
+          '-f mp4', // Output format
+        ])
+        .on('start', (commandLine) => {
+          console.log('FFmpeg command:', commandLine)
+        })
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err.message)
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream video' })
+          }
+        })
+        .on('end', () => {
+          console.log('Streaming finished')
+        })
+
+      // Pipe the output to the response
+      command.pipe(res, { end: true })
+    }
+    else {
+      // Audio is already compatible, stream original file with range support
+      console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
+      streamOriginalFile(videoPath, req, res)
+    }
+  }
+  catch (error) {
+    console.error('Error checking audio codec:', error)
+    // Fallback to original streaming
+    streamOriginalFile(videoPath, req, res)
+  }
+})
+
+// Helper function to stream original file with range support
+function streamOriginalFile(videoPath: string, req: Request, res: Response) {
   const range = req.headers.range
 
   try {
@@ -119,7 +198,7 @@ app.get('/api/stream', (req: Request, res: Response) => {
     console.error('Error streaming video:', error)
     res.status(500).json({ error: 'Failed to stream video' })
   }
-})
+}
 
 // Get current state (for debugging)
 app.get('/api/current', (_req: Request, res: Response) => {
