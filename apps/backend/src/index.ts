@@ -73,13 +73,15 @@ app.get('/api/stream', async (req: Request, res: Response) => {
   }
 
   const videoPath = currentItem.episode.path
+  const startPosition = req.query.start ? Number.parseInt(req.query.start as string, 10) : 0
 
   try {
     // Check if audio needs transcoding
     const { needsTranscoding, codec } = await checkAudioCodec(videoPath)
 
     if (needsTranscoding) {
-      console.log(`Transcoding audio from ${codec} to AAC for browser compatibility`)
+      const startMsg = startPosition > 0 ? ` starting at ${startPosition}s` : ''
+      console.log(`Transcoding audio from ${codec} to AAC for browser compatibility${startMsg}`)
 
       // Set headers for streaming
       res.setHeader('Content-Type', 'video/mp4')
@@ -87,6 +89,13 @@ app.get('/api/stream', async (req: Request, res: Response) => {
 
       // Transcode audio on-the-fly
       const command = ffmpeg(videoPath)
+
+      // If start position is specified, seek to that position
+      if (startPosition > 0) {
+        command.seekInput(startPosition)
+      }
+
+      command
         .outputOptions([
           '-c:v copy', // Copy video stream as-is (no transcoding)
           '-c:a aac', // Transcode audio to AAC (browser-compatible)

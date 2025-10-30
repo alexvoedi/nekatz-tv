@@ -19,12 +19,15 @@ async function syncToCurrentPosition() {
       if (currentEpisodePath !== newEpisodePath) {
         console.log('Loading new episode:', data.currentItem.episode.filename)
         currentEpisodePath = newEpisodePath
-        // Add timestamp to bust cache
-        videoRef.value.src = `${BACKEND_URL}/api/stream?t=${Date.now()}`
+        // Pass the start position to the backend for transcoded streams
+        videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}&t=${Date.now()}`
+        videoRef.value.play().catch(err => console.error('Autoplay failed:', err))
       }
-
-      videoRef.value.currentTime = data.position
-      videoRef.value.play().catch(err => console.error('Autoplay failed:', err))
+      else {
+        // Same episode, just seek to the current position
+        videoRef.value.currentTime = data.position
+        videoRef.value.play().catch(err => console.error('Autoplay failed:', err))
+      }
     }
   }
   catch (err) {
