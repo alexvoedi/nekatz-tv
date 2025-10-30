@@ -34,36 +34,58 @@ async function syncToCurrentPosition() {
           loadingTimeout = null
         }
 
-        // Pass the start position to the backend for transcoded streams
-        videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}`
+        // For transcoded streams, we MUST use the start parameter
+        // For non-transcoded, browser can handle seeking with Range requests
+        const startParam = data.position > 0 ? `?start=${Math.floor(data.position)}` : ''
+        videoRef.value.src = `${BACKEND_URL}/api/stream${startParam}`
+
+        console.log(`Loading video with start parameter: ${startParam}`)
 
         // Wait for metadata to load, then seek to position
         const onLoadedMetadata = async () => {
+          console.log('Metadata loaded, readyState:', videoRef.value?.readyState)
+
           // Clear timeout since we successfully loaded
           if (loadingTimeout) {
             clearTimeout(loadingTimeout)
             loadingTimeout = null
           }
 
-          if (videoRef.value && data.position > 0) {
-            console.log(`Seeking to position: ${data.position}s`)
-            videoRef.value.currentTime = data.position
-          }
-
-          // Try to play - if autoplay is blocked, mute and try again
+          // Try to play first (for autoplay policy)
           try {
             await videoRef.value!.play()
             hasUserInteracted.value = true
+            console.log('Video playing')
           }
           catch (err) {
             console.warn('Autoplay blocked, playing muted:', err)
             videoRef.value!.muted = true
             try {
               await videoRef.value!.play()
+              console.log('Video playing muted')
             }
             catch (mutedErr) {
               console.error('Autoplay failed even when muted:', mutedErr)
             }
+          }
+
+          // For transcoded streams, the backend already seeked server-side
+          // For non-transcoded, we need to seek client-side ASAP
+          if (videoRef.value && data.position > 0) {
+            // Seek immediately after play starts
+            console.log(`Seeking to ${data.position}s`)
+            videoRef.value.currentTime = data.position
+
+            // Verify after a short delay
+            setTimeout(() => {
+              if (videoRef.value && Math.abs(videoRef.value.currentTime - data.position) > 5) {
+                console.log(`Position mismatch detected, re-seeking from ${videoRef.value.currentTime}s to ${data.position}s`)
+                videoRef.value.currentTime = data.position
+              }
+              else {
+                console.log(`Position correct: ${videoRef.value?.currentTime}s (target: ${data.position}s)`)
+              }
+            }, 1000)
           }
 
           isLoadingNewEpisode = false

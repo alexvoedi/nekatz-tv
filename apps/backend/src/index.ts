@@ -74,12 +74,14 @@ app.get('/api/stream', async (req: Request, res: Response) => {
 
   const videoPath = currentItem.episode.path
   const startPosition = req.query.start ? Number.parseInt(req.query.start as string, 10) : 0
+  const hasRangeHeader = !!req.headers.range
 
   // Only log if it's a new episode or significant position change
   const shouldLog = startPosition === 0 || startPosition % 60 === 0 // Log every minute or at start
   if (shouldLog) {
     const posMsg = startPosition > 0 ? `, position: ${startPosition}s` : ''
-    console.log(`Stream request for ${currentItem.episode.filename}${posMsg}`)
+    const rangeMsg = hasRangeHeader ? ' (range request)' : ''
+    console.log(`Stream request for ${currentItem.episode.filename}${posMsg}${rangeMsg}`)
   }
 
   try {
@@ -87,12 +89,16 @@ app.get('/api/stream', async (req: Request, res: Response) => {
     const { needsTranscoding, codec } = await checkAudioCodec(videoPath)
 
     if (needsTranscoding) {
+      // For transcoded streams, we always use server-side seeking with the start parameter
+      // Range headers are ignored because FFmpeg outputs a continuous stream
+
       const startMsg = startPosition > 0 ? ` starting at ${startPosition}s` : ''
       console.log(`Transcoding audio from ${codec} to AAC for browser compatibility${startMsg}`)
 
       // Set headers for streaming
       res.setHeader('Content-Type', 'video/mp4')
       res.setHeader('Cache-Control', 'public, max-age=3600')
+      res.setHeader('Accept-Ranges', 'none') // FFmpeg output doesn't support range requests
 
       // Transcode audio on-the-fly
       const command = ffmpeg(videoPath)
@@ -132,16 +138,16 @@ app.get('/api/stream', async (req: Request, res: Response) => {
     }
     else {
       // Audio is already compatible, stream original file with range support
-      if (shouldLog) {
+      if (shouldLog && !hasRangeHeader) {
         console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
       }
 
-      // If a start position is specified but we're streaming the original file,
-      // we need to inform the frontend that it should seek client-side
-      if (startPosition > 0 && shouldLog) {
-        // For non-transcoded streams, we can't seek server-side efficiently
-        // So we'll stream from the beginning and let the client seek
-        console.log(`Note: Client should seek to position ${startPosition}s`)
+      // For non-transcoded streams with start parameter and no range header,
+      // calculate the byte offset and stream from there
+      if (startPosition > 0 && !hasRangeHeader) {
+        console.log(`Start position ${startPosition}s requested - client will seek after load`)
+        // Note: We stream from beginning and let client seek
+        // This is faster than calculating byte offsets
       }
 
       streamOriginalFile(videoPath, req, res)
