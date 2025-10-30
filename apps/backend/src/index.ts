@@ -75,7 +75,12 @@ app.get('/api/stream', async (req: Request, res: Response) => {
   const videoPath = currentItem.episode.path
   const startPosition = req.query.start ? Number.parseInt(req.query.start as string, 10) : 0
 
-  console.log(`Stream request for ${currentItem.episode.filename}, start position: ${startPosition}s`)
+  // Only log if it's a new episode or significant position change
+  const shouldLog = startPosition === 0 || startPosition % 60 === 0 // Log every minute or at start
+  if (shouldLog) {
+    const posMsg = startPosition > 0 ? `, position: ${startPosition}s` : ''
+    console.log(`Stream request for ${currentItem.episode.filename}${posMsg}`)
+  }
 
   try {
     // Check if audio needs transcoding
@@ -127,11 +132,13 @@ app.get('/api/stream', async (req: Request, res: Response) => {
     }
     else {
       // Audio is already compatible, stream original file with range support
-      console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
+      if (shouldLog) {
+        console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
+      }
 
       // If a start position is specified but we're streaming the original file,
       // we need to inform the frontend that it should seek client-side
-      if (startPosition > 0) {
+      if (startPosition > 0 && shouldLog) {
         // For non-transcoded streams, we can't seek server-side efficiently
         // So we'll stream from the beginning and let the client seek
         console.log(`Note: Client should seek to position ${startPosition}s`)

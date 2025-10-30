@@ -7,8 +7,14 @@ const videoRef = ref<HTMLVideoElement | null>(null)
 let currentEpisodePath: string | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 const hasUserInteracted = ref(false)
+let isLoadingNewEpisode = false // Prevent concurrent loads
+let loadingTimeout: ReturnType<typeof setTimeout> | null = null
 
 async function syncToCurrentPosition() {
+  // Prevent concurrent sync calls
+  if (isLoadingNewEpisode)
+    return
+
   try {
     const response = await fetch(`${BACKEND_URL}/api/current`)
     const data = await response.json()
@@ -19,12 +25,26 @@ async function syncToCurrentPosition() {
       // Only reload video if the episode changed
       if (currentEpisodePath !== newEpisodePath) {
         console.log('Loading new episode:', data.currentItem.episode.filename)
+        isLoadingNewEpisode = true
         currentEpisodePath = newEpisodePath
+
+        // Clear any existing timeout
+        if (loadingTimeout) {
+          clearTimeout(loadingTimeout)
+          loadingTimeout = null
+        }
+
         // Pass the start position to the backend for transcoded streams
-        videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}&t=${Date.now()}`
+        videoRef.value.src = `${BACKEND_URL}/api/stream?start=${data.position}`
 
         // Wait for metadata to load, then seek to position
         const onLoadedMetadata = async () => {
+          // Clear timeout since we successfully loaded
+          if (loadingTimeout) {
+            clearTimeout(loadingTimeout)
+            loadingTimeout = null
+          }
+
           if (videoRef.value && data.position > 0) {
             console.log(`Seeking to position: ${data.position}s`)
             videoRef.value.currentTime = data.position
@@ -45,15 +65,28 @@ async function syncToCurrentPosition() {
               console.error('Autoplay failed even when muted:', mutedErr)
             }
           }
+
+          isLoadingNewEpisode = false
         }
 
         videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
+
+        // Fallback: Reset flag after timeout in case metadata never loads
+        loadingTimeout = setTimeout(() => {
+          console.warn('Metadata loading timeout - resetting flag')
+          isLoadingNewEpisode = false
+          loadingTimeout = null
+        }, 5000)
       }
-      // Don't seek if it's the same episode - the backend already handles the position
     }
   }
   catch (err) {
     console.error('Failed to sync:', err)
+    isLoadingNewEpisode = false
+    if (loadingTimeout) {
+      clearTimeout(loadingTimeout)
+      loadingTimeout = null
+    }
   }
 }
 
@@ -88,6 +121,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (checkInterval) {
     clearInterval(checkInterval)
+  }
+  if (loadingTimeout) {
+    clearTimeout(loadingTimeout)
   }
   if (videoRef.value) {
     videoRef.value.removeEventListener('ended', handleEnded)
