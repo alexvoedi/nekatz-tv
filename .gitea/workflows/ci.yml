@@ -96,33 +96,3 @@ jobs:
           tags: ${{ env.DOCKER_IMAGE }}-backend:latest
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}-backend:cache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}-backend:cache,mode=max,image-manifest=true,oci-mediatypes=true
-
-  docker-optimizer:
-    name: Build & Push Optimizer Docker Image
-    runs-on: ubuntu-latest
-    needs: checks
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKER_REGISTRY_URL }}
-          username: ${{ gitea.repository_owner }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
-
-      - name: Build & Push Optimizer Image
-        uses: docker/build-push-action@v6
-        with:
-          context: apps/optimizer
-          file: apps/optimizer/Dockerfile
-          push: true
-          tags: ${{ env.DOCKER_IMAGE }}-optimizer:latest
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}-optimizer:cache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}-optimizer:cache,mode=max,image-manifest=true,oci-mediatypes=true
