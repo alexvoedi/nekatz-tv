@@ -27,12 +27,20 @@ const VAAPI_DEVICE = '/dev/dri/renderD128'
 if (fs.existsSync(VAAPI_DEVICE)) {
   try {
     // Try to run vainfo to check if VAAPI actually works
-    execSync('vainfo', { stdio: 'pipe', timeout: 5000 })
+    // Use LIBVA_DRIVER_NAME and DISPLAY to force DRM mode (no X server needed)
+    execSync('vainfo', {
+      stdio: 'pipe',
+      timeout: 5000,
+      env: { ...process.env, LIBVA_DRIVER_NAME: 'iHD', DISPLAY: '' },
+    })
     console.log('✓ Hardware acceleration (VAAPI) available')
     hwaccelAvailable = true
   }
-  catch {
+  catch (error) {
     console.log('⚠ VAAPI device exists but vainfo failed, using software encoding')
+    if (error instanceof Error && 'stderr' in error) {
+      console.log('  Debug:', (error as any).stderr?.toString().split('\n')[0])
+    }
   }
 }
 else {
