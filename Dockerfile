@@ -77,8 +77,12 @@ CMD ["nginx", "-g", "daemon off;"]
 
 FROM node:22-alpine AS backend
 
-# Install ffmpeg for video processing
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg and VAAPI drivers for hardware acceleration
+RUN apk add --no-cache \
+    ffmpeg \
+    intel-media-driver \
+    libva-utils \
+    mesa-va-gallium
 
 WORKDIR /prod/backend
 

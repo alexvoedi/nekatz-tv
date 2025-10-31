@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express'
+import { execSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -18,6 +19,26 @@ app.use(express.json())
 
 let playlistManager: PlaylistManager | null = null
 
+// Check if hardware acceleration is available
+let hwaccelAvailable = false
+const VAAPI_DEVICE = '/dev/dri/renderD128'
+
+// Check for VAAPI support at startup by testing if vainfo works
+if (fs.existsSync(VAAPI_DEVICE)) {
+  try {
+    // Try to run vainfo to check if VAAPI actually works
+    execSync('vainfo', { stdio: 'pipe', timeout: 5000 })
+    console.log('✓ Hardware acceleration (VAAPI) available')
+    hwaccelAvailable = true
+  }
+  catch {
+    console.log('⚠ VAAPI device exists but vainfo failed, using software encoding')
+  }
+}
+else {
+  console.log('⚠ Hardware acceleration not available, using software encoding')
+}
+
 // Initialize the playlist
 async function initialize() {
   console.log('Scanning shows directory:', SHOWS_DIR)
@@ -35,34 +56,7 @@ async function initialize() {
   console.log('Playlist initialized')
 }
 
-// Helper function to check if audio codec is browser-compatible
-async function checkAudioCodec(filePath: string): Promise<{ needsTranscoding: boolean, codec: string }> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        reject(err)
-        return
-      }
-
-      const audioStream = metadata.streams.find(s => s.codec_type === 'audio')
-      if (!audioStream) {
-        // No audio stream, no transcoding needed
-        resolve({ needsTranscoding: false, codec: 'none' })
-        return
-      }
-
-      const codec = audioStream.codec_name || ''
-      // Browser-compatible codecs: aac, mp3, opus, vorbis
-      const compatibleCodecs = ['aac', 'mp3', 'opus', 'vorbis']
-      const needsTranscoding = !compatibleCodecs.includes(codec)
-
-      resolve({ needsTranscoding, codec })
-    })
-  })
-}
-
-// Stream the current video with audio transcoding for browser compatibility
-// Stream the current video with optional transcoding and seeking
+// Stream the current video with transcoding
 app.get('/api/stream', async (req: Request, res: Response) => {
   if (!playlistManager) {
     return res.status(503).json({ error: 'Playlist not initialized. Please try again in a moment or check server status.' })
@@ -75,83 +69,88 @@ app.get('/api/stream', async (req: Request, res: Response) => {
 
   const videoPath = currentItem.episode.path
   const startPosition = req.query.start ? Number.parseInt(req.query.start as string, 10) : 0
-  const hasRangeHeader = !!req.headers.range
 
   // Log occasionally (every minute or at start)
   const shouldLog = startPosition === 0 || startPosition % 60 === 0
   if (shouldLog) {
     const posMsg = startPosition > 0 ? `, position: ${startPosition}s` : ''
-    const rangeMsg = hasRangeHeader ? ' (range request)' : ''
-    console.log(`Stream request for ${currentItem.episode.filename}${posMsg}${rangeMsg}`)
+    console.log(`Stream request for ${currentItem.episode.filename}${posMsg}`)
   }
 
-  try {
-    // Check if audio needs transcoding
-    const { needsTranscoding, codec } = await checkAudioCodec(videoPath)
-
-    // Use FFmpeg for seeking (with or without transcoding) if start position is specified
-    // FFmpeg seeking is much faster than client-side Range requests
-    if (startPosition > 0 || needsTranscoding) {
-      streamWithFFmpeg(videoPath, startPosition, needsTranscoding, codec, res)
-    }
-    else {
-      // No seeking needed and no transcoding - stream original file with Range support
-      if (shouldLog) {
-        console.log(`Audio codec ${codec} is browser-compatible, streaming original file`)
-      }
-      streamOriginalFile(videoPath, req, res)
-    }
-  }
-  catch (error) {
-    console.error('Error checking audio codec:', error)
-    streamOriginalFile(videoPath, req, res)
-  }
+  // Always use FFmpeg for transcoding and seeking
+  streamWithFFmpeg(videoPath, startPosition, req, res)
 })
 
-// Helper function to stream video with FFmpeg (transcoding and/or seeking)
+// Helper function to stream video with FFmpeg (always transcodes for compatibility)
 function streamWithFFmpeg(
   videoPath: string,
   startPosition: number,
-  needsTranscoding: boolean,
-  codec: string,
+  req: Request,
   res: Response,
 ) {
-  const mode = needsTranscoding ? 'transcode' : 'copy'
   const startMsg = startPosition > 0 ? ` starting at ${startPosition}s` : ''
-
-  if (needsTranscoding) {
-    console.log(`Transcoding audio from ${codec} to AAC${startMsg}`)
-  }
-  else {
-    console.log(`Seeking to ${startPosition}s with FFmpeg (copy mode)`)
-  }
+  console.log(`Transcoding video${startMsg}`)
 
   // Set headers (FFmpeg streams don't support Range requests)
   res.setHeader('Content-Type', 'video/mp4')
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
   res.setHeader('Accept-Ranges', 'none')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Transfer-Encoding', 'chunked')
+  res.status(200)
+
+  // Remove Range header if present (Firefox sometimes sends it)
+  delete req.headers.range
 
   const command = ffmpeg(videoPath)
 
-  // Output options: copy video, transcode or copy audio depending on need
-  const outputOptions = [
-    '-c:v copy', // Always copy video (no video transcoding)
-    needsTranscoding ? '-c:a aac' : '-c:a copy', // Transcode audio only if needed
-    ...(needsTranscoding ? ['-b:a 192k'] : []), // Audio bitrate for transcoding
-    '-avoid_negative_ts make_zero',
-    '-movflags frag_keyframe+empty_moov+faststart',
-    '-f mp4',
-  ]
-
-  // Seek to start position if specified
+  // Seek to start position if specified (must be before input options for VAAPI)
   if (startPosition > 0) {
     command.seekInput(startPosition)
   }
 
+  // Use hardware acceleration if available, otherwise fall back to software
+  if (hwaccelAvailable) {
+    // VAAPI hardware acceleration (Intel/AMD integrated graphics)
+    command
+      .inputOptions([
+        '-hwaccel vaapi',
+        `-hwaccel_device ${VAAPI_DEVICE}`,
+      ])
+      .outputOptions([
+        '-vf',
+        'format=nv12,hwupload',
+        '-c:v h264_vaapi',
+      ])
+  }
+  else {
+    // Software encoding
+    command.outputOptions([
+      '-c:v libx264',
+      '-preset veryfast',
+      '-tune zerolatency',
+      '-threads 0',
+    ])
+  }
+
+  // Common output options for both hardware and software
+  command.outputOptions([
+    '-b:v 3M', // Video bitrate (3 Mbps - good quality for streaming)
+    '-maxrate 5M', // Max bitrate 5 Mbps
+    '-bufsize 10M', // Buffer size
+    '-g 30', // Keyframe every 30 frames (enables better seeking)
+    '-c:a aac', // AAC audio codec
+    '-b:a 192k', // Audio bitrate
+    '-avoid_negative_ts make_zero',
+    '-movflags frag_keyframe+empty_moov+default_base_moof',
+    '-frag_duration 1000000', // 1 second fragments
+    '-f mp4',
+  ])
+
   command
-    .outputOptions(outputOptions)
     .on('start', (commandLine) => {
-      console.log(`FFmpeg ${mode}:`, commandLine)
+      const accel = hwaccelAvailable ? '(hardware)' : '(software)'
+      console.log(`FFmpeg ${accel}:`, commandLine)
     })
     .on('error', (err) => {
       console.error('FFmpeg error:', err.message)
@@ -163,97 +162,6 @@ function streamWithFFmpeg(
       console.log('Streaming finished')
     })
     .pipe(res, { end: true })
-}
-
-// Helper function to stream original file with range support
-function streamOriginalFile(videoPath: string, req: Request, res: Response) {
-  const range = req.headers.range
-
-  try {
-    const stat = fs.statSync(videoPath)
-    const fileSize = stat.size
-
-    if (range) {
-      // Parse range header (e.g., "bytes=0-1023")
-      const parts = range.replace(/bytes=/, '').split('-')
-      const start = Number.parseInt(parts[0], 10)
-      let end = parts[1] ? Number.parseInt(parts[1], 10) : fileSize - 1
-
-      // If browser requests open-ended range (e.g., "bytes=22708224-"),
-      // send a large chunk to reduce round-trips
-      if (!parts[1]) {
-        // Send at least 10MB or rest of file, whichever is smaller
-        const INITIAL_CHUNK = 10 * 1024 * 1024 // 10MB
-        end = Math.min(start + INITIAL_CHUNK - 1, fileSize - 1)
-      }
-
-      // Validate range
-      if (start >= fileSize || end >= fileSize || start > end) {
-        res.status(416).send('Requested range not satisfiable')
-        return
-      }
-
-      const chunksize = (end - start) + 1
-
-      // Use 2MB buffer for reading (faster disk I/O)
-      const highWaterMark = 2 * 1024 * 1024
-
-      const file = fs.createReadStream(videoPath, { start, end, highWaterMark })
-
-      const head = {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': 'video/mp4',
-        'Cache-Control': 'public, max-age=3600',
-        'Vary': 'Range', // Tell browser that responses vary by Range header
-      }
-
-      res.writeHead(206, head)
-
-      // Flush headers immediately to prevent browser from cancelling
-      if (typeof res.flushHeaders === 'function') {
-        res.flushHeaders()
-      }
-
-      file.pipe(res)
-
-      // Handle stream errors
-      file.on('error', (error) => {
-        console.error('Stream error:', error)
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to stream video' })
-        }
-      })
-    }
-    else {
-      const head = {
-        'Content-Length': fileSize,
-        'Content-Type': 'video/mp4',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
-      }
-      res.writeHead(200, head)
-
-      const stream = fs.createReadStream(videoPath, {
-        highWaterMark: 1024 * 1024, // 1MB chunks for better performance
-      })
-
-      stream.pipe(res)
-
-      // Handle stream errors
-      stream.on('error', (error) => {
-        console.error('Stream error:', error)
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to stream video' })
-        }
-      })
-    }
-  }
-  catch (error) {
-    console.error('Error streaming video:', error)
-    res.status(500).json({ error: 'Failed to stream video' })
-  }
 }
 
 // Get current state (for debugging)
@@ -270,27 +178,6 @@ app.get('/api/current', (_req: Request, res: Response) => {
     position,
     timestamp: Date.now(),
   })
-})
-
-// Check if current video needs transcoding
-app.get('/api/needs-transcoding', async (_req: Request, res: Response) => {
-  if (!playlistManager) {
-    return res.status(503).json({ error: 'Playlist not initialized' })
-  }
-
-  const currentItem = playlistManager.getCurrentItem()
-  if (!currentItem) {
-    return res.status(404).json({ error: 'No video currently playing' })
-  }
-
-  try {
-    const { needsTranscoding, codec } = await checkAudioCodec(currentItem.episode.path)
-    res.json({ needsTranscoding, codec })
-  }
-  catch (error) {
-    console.error('Error checking audio codec:', error)
-    res.status(500).json({ error: 'Failed to check audio codec' })
-  }
 })
 
 // Health check
