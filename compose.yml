@@ -14,9 +14,9 @@ services:
       - ./shows:/prod/backend/shows:ro
       - ./cache:/prod/backend/cache
     devices:
-      - /dev/dri:/dev/dri  # GPU device for hardware acceleration (VAAPI)
+      - /dev/dri:/dev/dri
     group_add:
-      - video  # Add container to video group for GPU access
+      - video
 
   frontend:
     build:
@@ -25,7 +25,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_BACKEND_URL: $VITE_BACKEND_URL
-        VITE_WEBSOCKET_URL: $VITE_WEBSOCKET_URL
     restart: unless-stopped
     ports:
       - 5173:80

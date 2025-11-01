@@ -25,11 +25,25 @@ interface MetadataCache {
 const metadataCache = new Map<string, MetadataCache>()
 const CACHE_DIR = path.join(process.cwd(), 'cache')
 const METADATA_CACHE_FILE = path.join(CACHE_DIR, 'video-metadata.json')
+const SCAN_LOG_FILE = path.join(CACHE_DIR, 'scan.log')
 
 // Ensure cache directory exists
 function ensureCacheDir() {
   if (!fsSync.existsSync(CACHE_DIR)) {
     fsSync.mkdirSync(CACHE_DIR, { recursive: true })
+  }
+}
+
+// Log to both console and file
+function log(message: string) {
+  console.log(message)
+  try {
+    ensureCacheDir()
+    const timestamp = new Date().toISOString()
+    fsSync.appendFileSync(SCAN_LOG_FILE, `[${timestamp}] ${message}\n`)
+  }
+  catch (error) {
+    console.error('Failed to write to log file:', error)
   }
 }
 
@@ -68,22 +82,45 @@ async function saveMetadataCache() {
 }
 
 // Parse filename like "Show Name - S01E01.mp4" or "Show Name - S01E01a.mp4" or "Show Name - S01E01 - Episode Title.mp4"
+// Also supports standalone episodes/movies like "Show Name - Episode Title.mp4"
 function parseEpisodeFilename(filename: string): { showName: string, season: number, episode: number, part: string } | null {
   // Remove extension
   const nameWithoutExt = filename.replace(/\.[^.]+$/, '')
 
   // Match pattern: "Show Name - S##E##[part]" where part is optional (a, b, c, etc.)
-  const regex = /^(.+)-\s*S(\d+)E(\d+)([a-z])?/i
-  const match = regex.exec(nameWithoutExt)
+  const episodeRegex = /^(.+)-\s*S(\d+)E(\d+)([a-z])?/i
+  const episodeMatch = episodeRegex.exec(nameWithoutExt)
 
-  if (!match)
-    return null
+  if (episodeMatch) {
+    return {
+      showName: episodeMatch[1].trim(),
+      season: Number.parseInt(episodeMatch[2], 10),
+      episode: Number.parseInt(episodeMatch[3], 10),
+      part: episodeMatch[4] || '', // Empty string if no part
+    }
+  }
 
+  // Fallback: "Show Name - Episode Title.mp4" (treat as S01E01, S01E02, etc. in order)
+  // Match any filename with a dash separator
+  const dashIndex = nameWithoutExt.indexOf(' - ')
+  if (dashIndex !== -1) {
+    // Use the part before the dash as show name
+    // Episode number will be assigned sequentially later
+    return {
+      showName: nameWithoutExt.substring(0, dashIndex).trim(),
+      season: 1,
+      episode: 0, // Will be assigned sequentially
+      part: '',
+    }
+  }
+
+  // No match - might be a single file like "Movie Name.mp4"
+  // Treat the whole filename as show name
   return {
-    showName: match[1].trim(),
-    season: Number.parseInt(match[2], 10),
-    episode: Number.parseInt(match[3], 10),
-    part: match[4] || '', // Empty string if no part
+    showName: nameWithoutExt.trim(),
+    season: 1,
+    episode: 0,
+    part: '',
   }
 }
 
@@ -135,36 +172,52 @@ async function getCachedVideoDuration(filePath: string): Promise<number> {
 }
 
 export async function scanShows(showsDir: string): Promise<Show[]> {
+  log(`📁 Scanning shows directory: ${showsDir}`)
+
   // Load cached metadata on first scan
   if (metadataCache.size === 0) {
     await loadMetadataCache()
   }
 
+  const failedFiles: Array<{ file: string, reason: string }> = []
+
   try {
     const entries = await fs.readdir(showsDir, { withFileTypes: true })
     const showFolders = entries.filter(entry => entry.isDirectory())
 
+    log(`📂 Found ${showFolders.length} show folders`)
+
     const shows: Show[] = []
 
     for (const folder of showFolders) {
+      log(`  📺 Scanning show: ${folder.name}`)
       const folderPath = path.join(showsDir, folder.name)
       const files = await fs.readdir(folderPath)
 
       const episodes: Episode[] = []
+      let skippedFiles = 0
 
       for (const file of files) {
         // Skip macOS metadata files, hidden files, and other system files
         if (SKIP_FILES.some(pattern => pattern.test(file))) {
+          skippedFiles++
           continue
         }
 
         const ext = path.extname(file).toLowerCase()
-        if (!VIDEO_EXTENSIONS.includes(ext))
+        if (!VIDEO_EXTENSIONS.includes(ext)) {
+          skippedFiles++
           continue
+        }
 
         const parsed = parseEpisodeFilename(file)
-        if (!parsed)
+        if (!parsed) {
+          const reason = 'Could not parse filename (expected format: "Show Name - S01E01.mp4")'
+          log(`    ❌ Failed: ${file}`)
+          log(`       Reason: ${reason}`)
+          failedFiles.push({ file: path.join(folder.name, file), reason })
           continue
+        }
 
         const filePath = path.join(folderPath, file)
 
@@ -180,11 +233,33 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
             part: parsed.part,
             duration,
           })
+
+          // Show warning symbol for files without explicit season/episode numbers
+          if (parsed.episode === 0) {
+            log(`    ⚠️  ${file} (auto-assigned episode number)`)
+          }
+          else {
+            log(`    ✓ ${file}`)
+          }
         }
         catch (error) {
           // Skip files that can't be processed (corrupted, unsupported format, etc.)
-          console.warn(`Skipping file ${file}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          const reason = error instanceof Error ? error.message : 'Unknown error'
+          log(`    ❌ Failed: ${file}`)
+          log(`       Reason: ${reason}`)
+          failedFiles.push({ file: path.join(folder.name, file), reason })
           continue
+        }
+      }
+
+      const skippedInfo = skippedFiles > 0 ? ` (skipped ${skippedFiles} non-video files)` : ''
+      log(`    ✅ Found ${episodes.length} episodes${skippedInfo}`)
+
+      // Assign sequential episode numbers to episodes with episode = 0
+      let nextEpisodeNum = 1
+      for (const episode of episodes) {
+        if (episode.episode === 0) {
+          episode.episode = nextEpisodeNum++
         }
       }
 
@@ -206,13 +281,25 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
       }
     }
 
+    log(`\n✨ Scan complete: Found ${shows.length} shows with a total of ${shows.reduce((sum, show) => sum + show.episodes.length, 0)} episodes\n`)
+
+    // Log failed files summary
+    if (failedFiles.length > 0) {
+      log(`\n⚠️  Failed to process ${failedFiles.length} file(s):\n`)
+      for (const { file, reason } of failedFiles) {
+        log(`   - ${file}`)
+        log(`     Reason: ${reason}`)
+      }
+      log('')
+    }
+
     // Save cache after scanning
     await saveMetadataCache()
 
     return shows
   }
   catch (error) {
-    console.error('Error scanning shows:', error)
+    console.error('❌ Error scanning shows:', error)
     return []
   }
 }
