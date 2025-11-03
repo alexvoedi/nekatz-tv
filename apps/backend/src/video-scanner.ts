@@ -26,6 +26,34 @@ const metadataCache = new Map<string, MetadataCache>()
 const CACHE_DIR = path.join(process.cwd(), 'cache')
 const METADATA_CACHE_FILE = path.join(CACHE_DIR, 'video-metadata.json')
 const SCAN_LOG_FILE = path.join(CACHE_DIR, 'scan.log')
+const LOGGED_ITEMS_FILE = path.join(CACHE_DIR, 'logged-items.json')
+
+// Track what has been logged to avoid duplicates
+let loggedItems = new Set<string>()
+
+// Load logged items from disk
+function loadLoggedItems() {
+  try {
+    ensureCacheDir()
+    const data = fsSync.readFileSync(LOGGED_ITEMS_FILE, 'utf-8')
+    loggedItems = new Set(JSON.parse(data))
+  }
+  catch {
+    // File doesn't exist or is invalid, start fresh
+    loggedItems = new Set()
+  }
+}
+
+// Save logged items to disk
+function saveLoggedItems() {
+  try {
+    ensureCacheDir()
+    fsSync.writeFileSync(LOGGED_ITEMS_FILE, JSON.stringify([...loggedItems]))
+  }
+  catch (error) {
+    console.error('Failed to save logged items:', error)
+  }
+}
 
 // Ensure cache directory exists
 function ensureCacheDir() {
@@ -34,13 +62,24 @@ function ensureCacheDir() {
   }
 }
 
-// Log to both console and file
-function log(message: string) {
+// Log to both console and file (only if not already logged)
+function log(message: string, key?: string) {
   console.log(message)
+
+  // If a key is provided, check if we've already logged this
+  if (key && loggedItems.has(key)) {
+    return // Already logged, skip file write
+  }
+
   try {
     ensureCacheDir()
     const timestamp = new Date().toISOString()
     fsSync.appendFileSync(SCAN_LOG_FILE, `[${timestamp}] ${message}\n`)
+
+    if (key) {
+      loggedItems.add(key)
+      saveLoggedItems()
+    }
   }
   catch (error) {
     console.error('Failed to write to log file:', error)
@@ -174,6 +213,11 @@ async function getCachedVideoDuration(filePath: string): Promise<number> {
 export async function scanShows(showsDir: string): Promise<Show[]> {
   log(`📁 Scanning shows directory: ${showsDir}`)
 
+  // Load logged items on first scan
+  if (loggedItems.size === 0) {
+    loadLoggedItems()
+  }
+
   // Load cached metadata on first scan
   if (metadataCache.size === 0) {
     await loadMetadataCache()
@@ -190,7 +234,7 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
     const shows: Show[] = []
 
     for (const folder of showFolders) {
-      log(`  📺 Scanning show: ${folder.name}`)
+      console.log(`  📺 Scanning show: ${folder.name}`)
       const folderPath = path.join(showsDir, folder.name)
       const files = await fs.readdir(folderPath)
 
@@ -213,8 +257,9 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
         const parsed = parseEpisodeFilename(file)
         if (!parsed) {
           const reason = 'Could not parse filename (expected format: "Show Name - S01E01.mp4")'
-          log(`    ❌ Failed: ${file}`)
-          log(`       Reason: ${reason}`)
+          const logKey = `parse-error:${folder.name}/${file}`
+          log(`    ❌ Failed: ${file}`, logKey)
+          log(`       Reason: ${reason}`, logKey)
           failedFiles.push({ file: path.join(folder.name, file), reason })
           continue
         }
@@ -234,19 +279,21 @@ export async function scanShows(showsDir: string): Promise<Show[]> {
             duration,
           })
 
-          // Show warning symbol for files without explicit season/episode numbers
+          // Show warning symbol for files without explicit season/episode numbers (only log once)
           if (parsed.episode === 0) {
-            log(`    ⚠️  ${file} (auto-assigned episode number)`)
+            const logKey = `auto-episode:${folder.name}/${file}`
+            log(`    ⚠️  ${file} (auto-assigned episode number)`, logKey)
           }
           else {
-            log(`    ✓ ${file}`)
+            console.log(`    ✓ ${file}`)
           }
         }
         catch (error) {
           // Skip files that can't be processed (corrupted, unsupported format, etc.)
           const reason = error instanceof Error ? error.message : 'Unknown error'
-          log(`    ❌ Failed: ${file}`)
-          log(`       Reason: ${reason}`)
+          const logKey = `error:${folder.name}/${file}`
+          log(`    ❌ Failed: ${file}`, logKey)
+          log(`       Reason: ${reason}`, logKey)
           failedFiles.push({ file: path.join(folder.name, file), reason })
           continue
         }
